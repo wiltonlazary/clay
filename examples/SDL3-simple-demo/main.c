@@ -23,7 +23,8 @@ typedef struct app_state {
     ClayVideoDemo_Data demoData;
 } AppState;
 
-SDL_Surface *sample_image;
+SDL_Texture *sample_image;
+bool show_demo = true;
 
 static inline Clay_Dimensions SDL_MeasureText(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData)
 {
@@ -31,6 +32,7 @@ static inline Clay_Dimensions SDL_MeasureText(Clay_StringSlice text, Clay_TextEl
     TTF_Font *font = fonts[config->fontId];
     int width, height;
 
+    TTF_SetFontSize(font, config->fontSize);
     if (!TTF_GetStringSize(font, text.chars, text.length, &width, &height)) {
         SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to measure text: %s", SDL_GetError());
     }
@@ -41,6 +43,38 @@ static inline Clay_Dimensions SDL_MeasureText(Clay_StringSlice text, Clay_TextEl
 void HandleClayErrors(Clay_ErrorData errorData) {
     printf("%s", errorData.errorText.chars);
 }
+
+
+Clay_RenderCommandArray ClayImageSample_CreateLayout() {
+    Clay_BeginLayout();
+
+    Clay_Sizing layoutExpand = {
+        .width = CLAY_SIZING_GROW(0),
+        .height = CLAY_SIZING_GROW(0)
+    };
+
+    CLAY(CLAY_ID("OuterContainer"), {
+        .layout = {
+            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+            .sizing = layoutExpand,
+            .padding = CLAY_PADDING_ALL(16),
+            .childGap = 16
+        }
+    }) {
+        CLAY(CLAY_ID("SampleImage"), {
+            .layout = {
+                .sizing = layoutExpand
+            },
+            .aspectRatio = { 23.0 / 42.0 },
+            .image = {
+                .imageData = sample_image,
+            }
+        });
+    }
+
+    return Clay_EndLayout();
+}
+
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
@@ -83,7 +117,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
     state->rendererData.fonts[FONT_ID] = font;
 
-    sample_image = IMG_Load("resources/sample.png");
+    sample_image = IMG_LoadTexture(state->rendererData.renderer, "resources/sample.png");
+    if (!sample_image) {
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to load image: %s", SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
 
     /* Initialize Clay */
     uint64_t totalMemorySize = Clay_MinMemorySize();
@@ -111,16 +149,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         case SDL_EVENT_QUIT:
             ret_val = SDL_APP_SUCCESS;
             break;
+        case SDL_EVENT_KEY_UP:
+            if (event->key.scancode == SDL_SCANCODE_SPACE) {
+                show_demo = !show_demo;
+            }
+            break;
         case SDL_EVENT_WINDOW_RESIZED:
             Clay_SetLayoutDimensions((Clay_Dimensions) { (float) event->window.data1, (float) event->window.data2 });
-            break;
-        case SDL_EVENT_MOUSE_MOTION:
-            Clay_SetPointerState((Clay_Vector2) { event->motion.x, event->motion.y },
-                                 event->motion.state & SDL_BUTTON_LMASK);
-            break;
-        case SDL_EVENT_MOUSE_BUTTON_DOWN:
-            Clay_SetPointerState((Clay_Vector2) { event->button.x, event->button.y },
-                                 event->button.button == SDL_BUTTON_LEFT);
             break;
         case SDL_EVENT_MOUSE_WHEEL:
             Clay_UpdateScrollContainers(true, (Clay_Vector2) { event->wheel.x, event->wheel.y }, 0.01f);
@@ -136,7 +171,19 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 {
     AppState *state = appstate;
 
-    Clay_RenderCommandArray render_commands = ClayVideoDemo_CreateLayout(&state->demoData);
+    float mouse_x, mouse_y;
+
+    Uint32 buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
+
+    Clay_SetPointerState(
+        (Clay_Vector2){.x = mouse_x, .y = mouse_y},
+        buttons & SDL_BUTTON_LMASK
+    );
+
+    Clay_RenderCommandArray render_commands = (show_demo
+        ? ClayVideoDemo_CreateLayout(&state->demoData)
+        : ClayImageSample_CreateLayout()
+    );
 
     SDL_SetRenderDrawColor(state->rendererData.renderer, 0, 0, 0, 255);
     SDL_RenderClear(state->rendererData.renderer);
@@ -158,6 +205,10 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 
     AppState *state = appstate;
 
+    if (sample_image) {
+        SDL_DestroyTexture(sample_image);
+    }
+
     if (state) {
         if (state->rendererData.renderer)
             SDL_DestroyRenderer(state->rendererData.renderer);
@@ -178,5 +229,6 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 
         SDL_free(state);
     }
+
     TTF_Quit();
 }
